@@ -4,22 +4,37 @@ Version: 0.0.1
 Imports: 
     gapminder,
     ggforce,
+    globals,
     openintro,
     shiny,
+    shinycssloaders,
     shinyFeedback,
     shinythemes,
+    testthat,
+    thematic (>= 0.0.1),
     tidyverse,
     vroom,
     waiter,
+    xml2,
     zeallot
 Suggests:
     bookdown,
+    bslib,
     desc,
+    downlit,
+    jsonlite,
     png,
     sessioninfo,
+    shinyloadtest,
     shinytest,
+    waldo,
     webshot (>= 0.5.0.9000)
+Remotes: 
+    rstudio/bookdown,
+    rstudio/bslib,
+    rstudio/rmarkdown,
+    rstudio/shiny,
+    rstudio/shinyloadtest,
+    rstudio/shinytest,
+    rstudio/thematic
 Encoding: UTF-8
-Remotes:
-    JohnCoene/waiter,
-    merlinoa/shinyFeedback

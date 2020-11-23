@@ -1,0 +1,274 @@
+# Escaping the graph {#reactivity-components}
+
+```{r setup, include=FALSE}
+source("common.R")
+```
+
+## Introduction
+
+Shiny's reactive programming framework is incredibly useful because it automatically determines the minimal set of computations needed to update all outputs when an input changes.
+But this framework is deliberately constraining, and sometimes you need to break free in order to do something dangerous but necessary.
+
+In this chapter you learn how you can break free of many of the constraints of reactive programming by using `reactiveVal()` and `observe()` to connect the right hand side of the graph back to the left hand side.
+The techniques that you will learn about are powerful because they give you manual control over parts of the graph.
+At the same time, they are dangerous because they allow your app to do unnecessary work.
+Most importantly, you can now create infinite loops where your app gets stuck in a cycle of updates that never end.
+
+If you find the ideas explored in this chapter to be interesting, you might also want to look at the [shinySignals](https://github.com/hadley/shinySignals/) and [rxtools](https://github.com/jcheng5/rxtools) packages.
+These are both experimental packages, designed to explore what tools might make it easier to program with reactivity.
+I wouldn't recommend you use them in "real" apps, but reading the source code might be illuminating.
+
+```{r}
+library(shiny)
+```
+
+## What doesn't the reactive graph capture?
+
+In Section \@ref(input-changes) we discussed what happens when the user causes an input to be invalidated.
+There are two other important cases where you as the app author might invalidate an input:
+
+-   You call an `update` function setting the `value` argument.
+    This sends a message to the browser to changing the value of an input, which then notifies R that the invalid has been changed.
+
+-   You modify the value of a reactive value (created with `reactiveVal()` or `reactiveValues()`).
+
+It's important to understand that in both of these cases a reactive dependency is *not* created between the reactive value and the observer.
+While these actions cause the graph to invalidate, they are not recorded through new connections.
+
+To make this idea concrete, take the following simple app, with reactive graph shown in Figure \@ref(fig:graph-mutation).
+
+```{r}
+ui <- fluidPage(
+  textInput("nm", "name"),
+  actionButton("clr", "Clear"),
+  textOutput("hi")
+)
+server <- function(input, output, session) {
+  hi <- reactive(paste0("Hi ", input$nm))
+  output$hi <- renderText(hi())
+  observeEvent(input$clr, {
+    updateTextInput(session, "nm", value = "")
+  })
+}
+```
+
+```{r graph-mutation, echo = FALSE, out.width = NULL, fig.cap = "The reactive graph does not record the connection between the unnamed observer and the `nm` input; this dependency is outside of its scope."}
+knitr::include_graphics("diagrams/reactivity-tracking/invalidate-1.png", dpi = 300)
+```
+
+What happens when you press the clear button?
+
+1.  `input$clr` invalidates, which then invalidates the observer.
+2.  The observer recomputes, recreating the dependency on `input$clr`, and telling the browser to change the value of the input control.
+3.  The browser changes the value of `nm`.
+4.  `input$nm` invalidates, invalidating `hi()` then `output$hi`.
+5.  `output$hi` recomputes, forcing `hi()` to recompute.
+
+None of these actions change the reactive graph, so it remains as in Figure \@ref(fig:graph-mutation) and the graph does not capture the connection from the observer to `input$nm`.
+
+## Case studies
+
+Next, lets take a look at a few useful cases where you might combine `reactiveVal()` and `observe()` to solve problems that are otherwise very challenging (if not impossible).
+These are useful templates for your own apps.
+
+### One output modified by multiple inputs
+
+To get started we'll tackle a very simple problem: I want a common text box that's updated by multiple events (this is rather similar to the framework provided by notifications):
+
+```{r, eval = FALSE}
+ui <- fluidPage(
+  actionButton("drink", "drink me"),
+  actionButton("eat", "eat me"),
+  textOutput("notice")
+)
+server <- function(input, output, session) {
+  notice <- reactiveVal("")
+  observeEvent(input$drink, notice("You are no longer thirsty"))
+  observeEvent(input$eat, notice("You are no longer hungry"))
+
+  output$notice <- renderText(notice())
+}
+```
+
+Things get slightly more complicated in the next example, where we have an app with two buttons that let you increase and decrease values.
+We use a `reactiveVal()` to store the current value, and then use `observeEvent()` to increment and decrement the value when the appropriate button is pushed.
+The main additional complexity here is that the new value of `n()` depends on the previous value.
+
+```{r}
+ui <- fluidPage(
+  actionButton("up", "up"),
+  actionButton("down", "down"),
+  textOutput("n")
+)
+server <- function(input, output, session) {
+  n <- reactiveVal(0)
+  observeEvent(input$up, n(n() + 1))
+  observeEvent(input$down, n(n() - 1))
+  
+  output$n <- renderText(n())
+}
+```
+
+It's worth taking a moment to draw the reactive graph for this app, as in Figure \@ref(fig:button-graph).
+Again note that the reactive graph does not include any connection from the observers back to the reactive value `n`.
+In fact, ignoring the names of the inputs and output, this graph is the same as the first app.
+
+```{r button-graph, echo = FALSE, out.width = NULL, fig.cap = "The reactive graph does not capture connections from observers to input values"}
+knitr::include_graphics("diagrams/reactivity-components.png", dpi = 300)
+```
+
+### Accumulating inputs
+
+It's a similar pattern if you want to accumulate a list of names as the user does data entry.
+Here the main difference is that we use `updateTextInput()` to reset the text box after the user clicks the add button.
+
+```{r}
+ui <- fluidPage(
+  textInput("name", "name"),
+  actionButton("add", "add"),
+  textOutput("names")
+)
+server <- function(input, output, session) {
+  names <- reactiveVal()
+  observeEvent(input$add, {
+    names(c(input$name, names()))
+    updateTextInput(session, "name", value = "")
+  })
+  
+  output$names <- renderText(names())
+}
+```
+
+We could make this slightly more useful by providing add and delete buttons:
+
+```{r}
+ui <- fluidPage(
+  textInput("name", "name"),
+  actionButton("add", "add"),
+  actionButton("del", "delete"),
+  textOutput("names")
+)
+server <- function(input, output, session) {
+  names <- reactiveVal()
+  observeEvent(input$add, {
+    names(unnion(names(), input$name))
+    updateTextInput(session, "name", value = "")
+  })
+  observeEvent(input$del, {
+    names(setdiff(names(), input$name))
+    updateTextInput(session, "name", value = "")
+  })
+  
+  output$names <- renderText(names())
+}
+```
+
+### Pausing animations
+
+Another common pattern is to provide a start and stop button that allows you to control some recurring event.
+This example uses a `running` reactive value to control whether or not the number increments, and `invalidateLater()` to ensure that the observer is invalidated every 250 ms when running.
+
+```{r}
+ui <- fluidPage(
+  actionButton("start", "start"),
+  actionButton("stop", "stop"),
+  textOutput("n")
+)
+server <- function(input, output, session) {
+  running <- reactiveVal(FALSE)
+  observeEvent(input$start, running(TRUE))
+  observeEvent(input$stop, running(FALSE))
+  
+  n <- reactiveVal(0)
+  observe({
+    if (running()) {
+      n(isolate(n()) + 1)
+      invalidateLater(250)
+    }
+  })
+  output$n <- renderText(n())
+}
+```
+
+Notice in this case we can't easily use `observeEvent()` because we want to condition on whether or not `running()` is `TRUE`.
+This means that we also **must** use `isolate()` --- if we don't this observer would also take a reactive dependency on `n`, which it updates, so it would get stuck in an infinite loop.
+
+Hopefully these examples start to give you a flavour of what programming with `reactiveVal()` and `observer()` feels like.
+It's very imperative: when this happens, do that; when that happens, do the other thing.
+This makes it easier to understand on a small scale, but harder to understand when bigger pieces start interacting.
+So generally, you'll want to use this as sparingly as possible, and keep it isolated so that the smallest possible number of observers modify the reactive value.
+
+### Exercises
+
+1.  Provide a server function that draws a histogram of 100 random numbers from a normal distribution when normal is clicked, and 100 random uniforms.
+
+    ```{r}
+    ui <- fluidPage(
+      actionButton("rnorm", "Normal"),
+      actionButton("runif", "Uniform"),
+      plotOutput("plot")
+    )
+    ```
+
+2.  Modify your code from above for to work with this UI:
+
+    ```{r}
+    ui <- fluidPage(
+      selectInput("type", "type", c("Normal", "Uniform")),
+      actionButton("go", "go"),
+      plotOutput("plot")
+    )
+    ```
+
+3.  Rewrite your code from the previous answer to eliminate the use of `observe()`/`observeEvent()` and only use `reactive()`.
+    Why can you do that for the second UI but not the first?
+
+## Anti-patterns
+
+Once you get the hang of this pattern it's easy to fall into bad habits:
+
+```{r}
+server <- function(input, output, session) {
+  df <- reactiveVal(cars)
+  observe(df(head(cars, input$nrows)))
+  
+  output$plot <- renderPlot(plot(df()))
+  output$table <- renderTable(df())
+}
+```
+
+In this simple case, this code doesn't do much extra work compared to the alternative that uses `reactive()`:
+
+```{r}
+server <- function(input, output, session) {
+  df <- reactive(head(cars, input$nrows))
+  
+  output$plot <- renderPlot(plot(df()))
+  output$table <- renderTable(df())
+}
+```
+
+But there are still two drawbacks:
+
+-   If the table or plot are in tabs that are not currently visible, the observer will still draw/plot them.
+
+-   If the `head()` throws an error, the `observe()` will terminate the app, but `reactive()` will propagate it so it's displayed reactive throws an error, it won't get propagated.
+
+And things will get progressively worse as the app gets more complicated.
+It's very easy to revert to the event-driven programming situation described in Section \@ref(event-driven).
+You end up doing a lot of hard work to analyse the flow of events in your app, rather than relying on Shiny to handle it for you automatically.
+
+It's informative to compare the two reactive graphs.
+Figure \@ref(fig:anti-pattern) shows the graph from the first example.
+It's misleading because it doesn't look like `nrows` is connected to `df()`.
+Using a reactive, as in Figure \@ref(fig:pattern), makes the precise connection easy to see.
+Having a reactive graph that is as simple as possible is important for both humans and for Shiny.
+A simple graph is easier for humans to understand, and a simple graph is easier for Shiny to optimise.
+
+```{r anti-pattern, echo = FALSE, out.width = NULL, fig.cap = "Using reactive values and observers leaves part of the graph disconnected"}
+knitr::include_graphics("diagrams/reactivity-components/danger.png", dpi = 300)
+```
+
+```{r pattern, echo = FALSE, out.width = NULL, fig.cap = "Using a reactives makes the dependencies between the components very clear."}
+knitr::include_graphics("diagrams/reactivity-components/danger-2.png", dpi = 300)
+```

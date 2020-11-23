@@ -26,20 +26,20 @@ rmd_files:
     "action-bookmark.Rmd",
     "action-tidy.Rmd",
 
+    "reactivity.Rmd",
+    "reactivity-motivation.Rmd",
+    "reactivity-graph.Rmd",
+    "reactivity-foundations.Rmd",
+    "reactivity-escaping.Rmd",
+
     "scaling.Rmd",
     "scaling-general.Rmd",
     "scaling-functions.Rmd",
     "scaling-modules.Rmd",
+    "scaling-packages.Rmd",
     "scaling-testing.Rmd",
     "scaling-safety.Rmd",
-
-    "reactivity-mastering.Rmd",
-    "reactivity-motivation.Rmd",
-    "reactivity-tracking.Rmd",
-    "reactivity-scoping.Rmd",
-    "reactivity-components.Rmd",
-
-    "advanced-ui.Rmd",
+    "scaling-performance.Rmd",
   ]
 
 
